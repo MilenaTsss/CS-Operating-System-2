@@ -1,20 +1,54 @@
+//
+// Created by milen on 23.04.2023.
+//
+
 #include "helper.h"
 
 void destroy() {
-    // destroying semaphores
-    for (int i = 0; first_field != NULL && second_field != NULL && i < field_size * field_size; ++i) {
-        if (first_field[i].type == ALIVE_GUN || first_field[i].type == DEAD_GUN || first_field[i].type == FINISH) {
-            sem_destroy(&first_field[i].gun_semaphore);
-            sem_destroy(&first_field[i].manager_semaphore);
+    char* semaphore_name;
+    for (int i = 0; gun_semaphores_pointer_first != NULL && i < field_size * field_size; ++i) {
+        sem_destroy(gun_semaphores_pointer_first[i]);
+        semaphore_name = get_semaphore_name(i, 1, gun_semaphore_name);
+        if (sem_unlink(semaphore_name) == -1) {
+            perror("sem_unlink");
+            system_error("Error getting pointer to semaphore");
         }
-
-        if (second_field[i].type == ALIVE_GUN || second_field[i].type == DEAD_GUN || second_field[i].type == FINISH) {
-            sem_destroy(&second_field[i].gun_semaphore);
-            sem_destroy(&second_field[i].manager_semaphore);
-        }
+        free(semaphore_name);
     }
 
-    printf("Closed all semaphores\n");
+    for (int i = 0; gun_semaphores_pointer_second != NULL && i < field_size * field_size; ++i) {
+        sem_destroy(gun_semaphores_pointer_second[i]);
+        semaphore_name = get_semaphore_name(i, 2, gun_semaphore_name);
+        if (sem_unlink(semaphore_name) == -1) {
+            perror("sem_unlink");
+            system_error("Error getting pointer to semaphore");
+        }
+        free(semaphore_name);
+    }
+
+    printf("Gun semaphores are closed\n");
+
+    for (int i = 0; manager_semaphores_pointer_first != NULL && i < field_size * field_size; ++i) {
+        sem_destroy(manager_semaphores_pointer_first[i]);
+        semaphore_name = get_semaphore_name(i, 1, manager_semaphore_name);
+        if (sem_unlink(semaphore_name) == -1) {
+            perror("sem_unlink");
+            system_error("Error getting pointer to semaphore");
+        }
+        free(semaphore_name);
+    }
+    for (int i = 0; manager_semaphores_pointer_second != NULL && i < field_size * field_size; ++i) {
+        sem_destroy(manager_semaphores_pointer_second[i]);
+        semaphore_name = get_semaphore_name(i, 2, manager_semaphore_name);
+        if (sem_unlink(semaphore_name) == -1) {
+            perror("sem_unlink");
+            system_error("Error getting pointer to semaphore");
+        }
+        free(semaphore_name);
+    }
+
+    printf("Manager semaphores are closed\n");
+
 
     if ((shmid = shm_open(memory_name, O_CREAT | O_RDWR, S_IRWXU)) == -1) {
         if (shm_unlink(memory_name) == -1) {
@@ -25,12 +59,12 @@ void destroy() {
     printf("Shared memory is unlinked\n");
 }
 
-void gun(int id, int num_of_field) {
+void gun(int id, int num_of_field, sem_t *gun_semaphore, sem_t *manager_semaphore) {
     point_t *current_field = num_of_field == 1 ? first_field : second_field;
     point_t *another_field = num_of_field == 2 ? first_field : second_field;
 
     while (1) {
-        sem_wait(&current_field[id].gun_semaphore);
+        sem_wait(gun_semaphore);
         if (current_field[id].type == FINISH) {
             break;
         }
@@ -45,27 +79,28 @@ void gun(int id, int num_of_field) {
             }
             sleep(current_field[id].target_coordinate / 30);
         }
-        sem_post(&current_field[id].manager_semaphore);
+        sem_post(manager_semaphore);
     }
     printf("Point: %d from field %d is finished\n", id, num_of_field);
     close(shmid);
-    sem_post(&current_field[id].manager_semaphore);
+    sem_post(manager_semaphore);
 }
 
-void manager() {
+void manager(sem_t **gun_semaphores_first, sem_t **gun_semaphores_second,
+             sem_t **manager_semaphores_first, sem_t **manager_semaphores_second) {
     int status;
     while (1) {
         generate_targets(1);
         printf("Generated targets for first side\n");
         for (int i = 0; i < field_size * field_size; ++i) {
             if (first_field[i].type != EMPTY_POINT && first_field[i].type != USED_POINT) {
-                sem_post(&first_field[i].gun_semaphore);
+                sem_post(gun_semaphores_first[i]);
             }
         }
 
         for (int i = 0; i < field_size * field_size; ++i) {
             if (first_field[i].type != EMPTY_POINT && first_field[i].type != USED_POINT) {
-                sem_wait(&first_field[i].manager_semaphore);
+                sem_wait(manager_semaphores_first[i]);
                 printf("Shot made by first side from %d into %d. Now this point is %s\n",
                        i, first_field[i].target_coordinate,
                        get_point_type(second_field[first_field[i].target_coordinate].type));
@@ -84,13 +119,13 @@ void manager() {
         printf("Generated targets for second side\n");
         for (int i = 0; i < field_size * field_size; ++i) {
             if (second_field[i].type != EMPTY_POINT && second_field[i].type != USED_POINT) {
-                sem_post(&second_field[i].gun_semaphore);
+                sem_post(gun_semaphores_second[i]);
             }
         }
 
         for (int i = 0; i < field_size * field_size; ++i) {
             if (second_field[i].type != EMPTY_POINT && second_field[i].type != USED_POINT) {
-                sem_wait(&second_field[i].manager_semaphore);
+                sem_wait(manager_semaphores_second[i]);
                 printf("Shot made by second side from %d into %d. Now this point type is %s\n",
                        i, second_field[i].target_coordinate,
                        get_point_type(first_field[second_field[i].target_coordinate].type));
@@ -111,20 +146,20 @@ void manager() {
     for (int i = 0; i < field_size * field_size; ++i) {
         if (first_field[i].type == ALIVE_GUN || first_field[i].type == DEAD_GUN) {
             first_field[i].type = FINISH;
-            sem_post(&first_field[i].gun_semaphore);
+            sem_post(gun_semaphores_first[i]);
         }
         if (second_field[i].type == ALIVE_GUN || second_field[i].type == DEAD_GUN) {
             second_field[i].type = FINISH;
-            sem_post(&second_field[i].gun_semaphore);
+            sem_post(gun_semaphores_second[i]);
         }
     }
 
     for (int i = 0; i < field_size * field_size; ++i) {
         if (first_field[i].type == FINISH) {
-            sem_wait(&first_field[i].manager_semaphore);
+            sem_wait(manager_semaphores_first[i]);
         }
         if (second_field[i].type == FINISH) {
-            sem_wait(&second_field[i].manager_semaphore);
+            sem_wait(manager_semaphores_second[i]);
         }
     }
 }
@@ -135,7 +170,6 @@ void handler(int signal) {
     exit(0);
 }
 
-// first arg = size of field, second arg = number of guns
 int main(int argc, char **argv) {
     srand(time(NULL));// NOLINT(cert-msc51-cpp)
     if (argc != 3) {
@@ -172,26 +206,34 @@ int main(int argc, char **argv) {
     fill_field(first_field);
     fill_field(second_field);
 
-    // init all semaphores for first and second field
+    sem_t *gun_semaphores_first[field_size * field_size];
+    sem_t *gun_semaphores_second[field_size * field_size];
     for (int i = 0; i < field_size * field_size; ++i) {
-        if (first_field[i].type == ALIVE_GUN) {
-            if (sem_init(&first_field[i].gun_semaphore, 1, 0) == -1) {
-                system_error("Creating gun semaphore for first went wrong");
-            }
-            if (sem_init(&first_field[i].manager_semaphore, 1, 0) == -1) {
-                system_error("Creating gun semaphore for first went wrong");
-            }
-        }
+        char* semaphore_name = get_semaphore_name(i, 1, gun_semaphore_name);
+        gun_semaphores_first[i] = sem_open(semaphore_name, O_CREAT, 0666, 0);
+        free(semaphore_name);
 
-        if (second_field[i].type == ALIVE_GUN) {
-            if (sem_init(&second_field[i].gun_semaphore, 1, 0) == -1) {
-                system_error("Creating gun semaphore for second went wrong");
-            }
-            if (sem_init(&second_field[i].manager_semaphore, 1, 0) == -1) {
-                system_error("Creating gun semaphore for second went wrong");
-            }
-        }
+        semaphore_name = get_semaphore_name(i, 2, gun_semaphore_name);
+        gun_semaphores_second[i] = sem_open(semaphore_name, O_CREAT, 0666, 0);
+        free(semaphore_name);
     }
+    gun_semaphores_pointer_first = gun_semaphores_first;
+    gun_semaphores_pointer_second = gun_semaphores_second;
+
+    sem_t *manager_semaphores_first[field_size * field_size];
+    sem_t *manager_semaphores_second[field_size * field_size];
+    for (int i = 0; i < field_size * field_size; ++i) {
+        char* semaphore_name = get_semaphore_name(i, 1, manager_semaphore_name);
+        manager_semaphores_first[i] = sem_open(semaphore_name, O_CREAT, 0666, 0);
+        free(semaphore_name);
+
+        semaphore_name = get_semaphore_name(i, 2, manager_semaphore_name);
+        manager_semaphores_second[i] = sem_open(semaphore_name, O_CREAT, 0666, 0);
+        free(semaphore_name);
+    }
+
+    manager_semaphores_pointer_first = manager_semaphores_first;
+    manager_semaphores_pointer_second = manager_semaphores_second;
     printf("All semaphores are inited\n\n");
 
     // creating all guns
@@ -200,7 +242,7 @@ int main(int argc, char **argv) {
             if (fork() == 0) {
                 signal(SIGINT, prev);
                 printf("Gun from first side in coordinate: %d\n", i);
-                gun(i, 1);
+                gun(i, 1, gun_semaphores_first[i], manager_semaphores_first[i]);
                 exit(0);
             }
         }
@@ -208,13 +250,13 @@ int main(int argc, char **argv) {
             if (fork() == 0) {
                 signal(SIGINT, prev);
                 printf("Gun from second side in coordinate: %d\n", i);
-                gun(i, 2);
+                gun(i, 2, gun_semaphores_second[i], manager_semaphores_second[i]);
                 exit(0);
             }
         }
     }
 
-    manager();
+    manager(gun_semaphores_first, gun_semaphores_second, manager_semaphores_first, manager_semaphores_second);
     destroy();
     return 0;
 }
