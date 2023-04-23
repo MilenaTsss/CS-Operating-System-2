@@ -194,7 +194,7 @@ void handler(int signal){
 
 void fill_field(point_t *field) {
     for (int i = 0; i < field_size * field_size; ++i) {
-        field[i].type = 0;
+        field[i].type = EMPTY_POINT;
         field[i].target_coordinate = -1;
     }
 
